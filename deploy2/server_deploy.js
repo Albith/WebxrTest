@@ -2,6 +2,6 @@
 
 const { PeerServer } = require('peer');
 
-const server = PeerServer({port: 9001, path: '/deploy'});
+const server = PeerServer({port: 9001, path: '/'});
 
-server.listen(9000);
+server.listen(9001);
