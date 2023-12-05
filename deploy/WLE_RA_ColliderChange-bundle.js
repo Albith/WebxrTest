@@ -22941,8 +22941,268 @@ __publicField(WasdControlsComponent, "Properties", {
   headObject: { type: Type.Object }
 });
 
+// js/InputManager.js
+var InputManager = class extends Component {
+  //XR Input Variables (for the hand and index trigger) are not needed.
+  //The Event listeners can handle this input.
+  //GamepadInput Variables. Event listeners for the Gamepad object are limited.
+  LHand_input;
+  RHand_input;
+  L_buttonYHeld = false;
+  L_buttonXHeld = false;
+  R_buttonBHeld = false;
+  R_buttonAHeld = false;
+  L_thumbButtonHeld = false;
+  R_thumbButtonHeld = false;
+  //Including state vars for the Joystick's axes.
+  R_Xaxis_held = false;
+  //  start() {
+  startManager() {
+    console.log(":::::::::::::Starting the Input Manager.");
+    this.local_GM = this.local_GM.getComponent(PeerGameManager);
+    this.localPlayer = this.localPlayer.getComponent(LocalPlayer);
+    this.setupListeners();
+  }
+  //------------Setting up the Listeners in the Local Player.
+  //We use this to notify the Local Player (or Peer Game Manager) if any objects need to be spawned.
+  //Keyboard listeners are also included, in order to debug in the PC.
+  setupListeners() {
+    this.engine.onXRSessionStart.add((session, mode) => {
+      if (!this.local_GM.isInPCMode)
+        setTimeout(
+          () => {
+            this.localPlayer.update_StandingSittingMode_Offsets();
+            this.localPlayer.updateCockpitPosition();
+          },
+          40
+        );
+      this.engine.xr.session.addEventListener("selectstart", this.selectstart.bind(this));
+      this.engine.xr.session.addEventListener("squeezestart", this.squeezestart.bind(this));
+      this.engine.xr.session.addEventListener("squeezeend", this.squeezeend.bind(this));
+    });
+    this.RHand_input = this.localPlayer.pilotRightHand.getComponent(InputComponent);
+    this.LHand_input = this.localPlayer.pilotLeftHand.getComponent(InputComponent);
+    window.addEventListener("keydown", this.keyPress.bind(this));
+  }
+  //-----------Called from listener: Keyboard input check function.            
+  keyPress(e) {
+    if (e.keyCode === 77) {
+      this.localPlayer.switchWeapon(true, "left");
+    } else if (e.keyCode === 52) {
+      this.local_GM.matchFinishedSequence();
+    } else if (e.keyCode === 16) {
+      this.localPlayer.rotate(null, false);
+    } else if (e.keyCode === 13) {
+      this.localPlayer.rotate(null, true);
+    } else if (e.keyCode === 57) {
+      this.localPlayer.rotate(null, true, "X");
+    } else if (e.keyCode === 48) {
+      this.localPlayer.rotate(null, false, "X");
+    } else if (e.keyCode === 32) {
+      this.localPlayer.bulletInputEvent("left");
+    }
+  }
+  //-----------Called from listener: XR Input check function(s). 
+  //Only checking for the index trigger input check for now.
+  selectstart(e) {
+    this.localPlayer.bulletInputEvent(e.inputSource.handedness);
+  }
+  squeezestart(e) {
+    if (e.inputSource.handedness === "left")
+      this.L_thumbButtonHeld = true;
+    else
+      this.R_thumbButtonHeld = true;
+    this.localPlayer.isCockpit_following_pilotHead = false;
+  }
+  squeezeend(e) {
+    if (e.inputSource.handedness === "left")
+      this.L_thumbButtonHeld = false;
+    else
+      this.R_thumbButtonHeld = false;
+    this.localPlayer.isCockpit_following_pilotHead = true;
+  }
+  //------------XR Gamepad input check Function. This is called from the update(dt) function.
+  checkGamePadState(handInput) {
+    if (handInput && handInput.xrInputSource) {
+      var upButtonHeld, downButtonHeld;
+      var whichHand, axisHeld;
+      if (handInput === this.RHand_input) {
+        upButtonHeld = this.R_buttonBHeld;
+        downButtonHeld = this.R_buttonAHeld;
+        axisHeld = this.R_Xaxis_held;
+        whichHand = "right";
+      } else if (handInput === this.LHand_input) {
+        upButtonHeld = this.L_buttonYHeld;
+        downButtonHeld = this.L_buttonXHeld;
+        whichHand = "left";
+      }
+      switch (true) {
+        case handInput.xrInputSource.gamepad.buttons[5].pressed:
+          if (!upButtonHeld) {
+            upButtonHeld = true;
+            this.localPlayer.switchWeapon(true, whichHand);
+          }
+          break;
+        case handInput.xrInputSource.gamepad.buttons[4].pressed:
+          if (!downButtonHeld) {
+            downButtonHeld = true;
+            if (handInput === this.RHand_input)
+              this.local_GM.showButtonConfig(true);
+          }
+          break;
+        case (handInput.xrInputSource.gamepad.axes[2] !== 0 && handInput === this.RHand_input):
+          if (!axisHeld) {
+            let axisValue = this.filterAxisInput(handInput.xrInputSource.gamepad.axes[2], 0.2);
+            if (axisValue != 0) {
+              axisHeld = true;
+              this.localPlayer.rotate(null, axisValue > 0 ? true : false);
+            }
+          }
+          break;
+        default:
+          break;
+      }
+      switch (true) {
+        case (upButtonHeld && !handInput.xrInputSource.gamepad.buttons[5].pressed):
+          upButtonHeld = false;
+          break;
+        case (downButtonHeld && !handInput.xrInputSource.gamepad.buttons[4].pressed):
+          downButtonHeld = false;
+          if (handInput === this.RHand_input)
+            this.local_GM.showButtonConfig(false);
+          break;
+        case (axisHeld && handInput.xrInputSource.gamepad.axes[2] === 0):
+          axisHeld = false;
+          break;
+        default:
+          break;
+      }
+      if (handInput === this.RHand_input) {
+        this.R_buttonBHeld = upButtonHeld;
+        this.R_buttonAHeld = downButtonHeld;
+        this.R_Xaxis_held = axisHeld;
+      } else if (handInput === this.LHand_input) {
+        this.L_buttonYHeld = upButtonHeld;
+        this.L_buttonXHeld = downButtonHeld;
+      }
+    }
+  }
+  //-----------Input axis filterning function.
+  filterAxisInput(axisValue, deadThreshold) {
+    if (axisValue < deadThreshold && axisValue > -1 * deadThreshold)
+      axisValue = 0;
+    else {
+      if (axisValue > 0)
+        axisValue = 1;
+      if (axisValue < 0)
+        axisValue = -1;
+    }
+    return axisValue;
+  }
+  //----------Looping update function.
+  update(dt) {
+    this.checkGamePadState(this.RHand_input);
+    this.checkGamePadState(this.LHand_input);
+  }
+};
+__publicField(InputManager, "TypeName", "InputManager");
+// static onRegister(engine) {
+//     /* Triggered when this component class is registered.
+//      * You can for instance register extra component types here
+//      * that your component may create. */
+// }
+/* Properties that are configurable in the editor */
+__publicField(InputManager, "Properties", {
+  //Reference to the PeerGameServer parent.
+  //Reference to the Game Manager.
+  local_GM: Property.object(),
+  localPlayer: Property.object()
+});
+
+// js/LevelObjects/ArrowCursor_Animation.js
+var ArrowCursorAnimation = class extends Component {
+  arrowAssets = [];
+  currentArrow = 0;
+  currentTime = 0;
+  //Used for clearing and setting the interval.
+  intervalId = null;
+  //a status variable to not call the animation more than once.
+  isAnimating = false;
+  static onRegister(engine2) {
+  }
+  temp_meshComponent;
+  init() {
+    let tempArrowAssets = [];
+    for (let i = 0; i < this.object.children.length; i++) {
+      for (let j = 0; j < this.object.children.length; j++) {
+        if (this.object.children[j].name === "Arrow" + i.toString()) {
+          tempArrowAssets.push(this.object.children[j]);
+          break;
+        }
+      }
+    }
+    for (let i = 0; i < tempArrowAssets.length; i++) {
+      this.temp_meshComponent = tempArrowAssets[i].getComponent(MeshComponent);
+      this.arrowAssets.push(
+        this.temp_meshComponent.material
+      );
+    }
+  }
+  start() {
+    console.log("%%%%%ArrowCursor Anim--> start()");
+    for (let i = 0; i < this.arrowAssets.length; i++) {
+      this.arrowAssets[i].color = [1, 1, 1, 0];
+    }
+  }
+  setAnimationFrame(frameNumber) {
+    this.currentArrow = frameNumber;
+    for (let i = 0; i < frameNumber; i++) {
+      this.arrowAssets[i].color = [1, 1, 1, 1];
+    }
+  }
+  startAnimation() {
+    if (this.isAnimating)
+      return;
+    this.isAnimating = true;
+    this.setAnimationFrame(this.arrowAssets.length - 1);
+    this.intervalId = setInterval(this.playAnimation.bind(this), this.showArrowTime * 1e3);
+  }
+  stopAnimation() {
+    if (this.intervalId !== null) {
+      clearInterval(this.intervalId);
+      this.intervalId = null;
+    }
+    for (let i = 0; i < this.arrowAssets.length; i++) {
+      this.arrowAssets[i].color = [1, 1, 1, 0];
+    }
+    this.currentArrow = 0;
+    this.isAnimating = false;
+  }
+  playAnimation() {
+    console.log("%%%%%ArrowCursor Anim--> playAnimation()");
+    if (this.currentArrow >= this.arrowAssets.length) {
+      for (let i = 0; i < this.arrowAssets.length; i++) {
+        this.arrowAssets[i].color = [1, 1, 1, 0];
+      }
+      this.currentArrow = 0;
+    } else {
+      this.arrowAssets[this.currentArrow].color = [1, 1, 1, 1];
+      this.currentArrow++;
+    }
+  }
+};
+__publicField(ArrowCursorAnimation, "TypeName", "ArrowCursor_Animation");
+/* Properties that are configurable in the editor */
+__publicField(ArrowCursorAnimation, "Properties", {
+  showArrowTime: Property.float(0.25)
+});
+
 // js/teleport_fuel_3.js
 var TeleportFuel3 = class extends Component {
+  teleportArrowObject;
+  teleportDistance = 0;
+  maxDistance = 0;
+  wallHit = false;
   init() {
     console.log("===============> Teleport3, init()");
     this._prevThumbstickAxis = new Float32Array(2);
@@ -22957,7 +23217,7 @@ var TeleportFuel3 = class extends Component {
       );
       return;
     }
-    if (!this.teleportIndicatorMeshObject) {
+    if (!this.teleportArrowAnimation) {
       console.error(
         this.object.name,
         "generic-teleport-component.js: Teleport indicator mesh is missing"
@@ -22980,12 +23240,11 @@ var TeleportFuel3 = class extends Component {
   }
   //Adding a device check for : Oculus, or not Oculus (aimed at Pico).
   //isOculusQuest=false;
+  isMouseIndicating = false;
   start() {
     console.log("===============> Teleport3, start()");
     if (this.cam) {
       this.isMouseIndicating = false;
-      canvas.addEventListener("mousedown", this.onMouseDown.bind(this));
-      canvas.addEventListener("mouseup", this.onMouseUp.bind(this));
     }
     if (this.handedness == 0) {
       const inputComp = this.object.getComponent("input");
@@ -23003,8 +23262,15 @@ var TeleportFuel3 = class extends Component {
       this.handedness = ["left", "right"][this.handedness - 1];
     }
     this.onSessionStartCallback = this.setupVREvents.bind(this);
-    this.teleportIndicatorMeshObject.active = false;
+    this.teleportArrowObject = this.teleportArrowAnimation;
+    this.teleportArrowAnimation = this.teleportArrowAnimation.getComponent(ArrowCursorAnimation);
     this.localPlayer = this.localPlayer.getComponent(LocalPlayer);
+    setTimeout(this.setupDistanceVariables.bind(this), 500);
+  }
+  //Setup functions.
+  setupDistanceVariables() {
+    this.teleportDistance = this.localPlayer.PlayerData.teleportDistance;
+    console.log("Teleport: Setting up Distance Variables: teleport Distance " + this.teleportDistance + ", this.maxDistance " + this.maxDistance + ".");
   }
   onActivate() {
     this.engine.onXRSessionStart.add(this.onSessionStartCallback);
@@ -23028,40 +23294,46 @@ var TeleportFuel3 = class extends Component {
     }
     if (!this.isIndicating && this._prevThumbstickAxis[1] >= this.thumbstickActivationThreshhold && this._currentStickAxes[1] < this.thumbstickActivationThreshhold) {
       this.isIndicating = true;
-    } else if (this.isIndicating && inputLength < this.thumbstickDeactivationThreshhold) {
+    } else if (this.isIndicating && //!this._isButtonPressed
+    inputLength < this.thumbstickDeactivationThreshhold) {
       this.isIndicating = false;
-      this.teleportIndicatorMeshObject.active = false;
+      this.teleportArrowAnimation.stopAnimation();
       if (this._hasHit) {
         this._teleportPlayer(this.tempYRotation);
       }
     }
-    if (this.isIndicating && this.teleportIndicatorMeshObject && this.input) {
-      console.log("===============> Teleport3, attempting teleport in Update()");
-      const origin = this._tempVec0;
+    if (this.isIndicating && this.teleportArrowAnimation && this.input) {
+      let origin = this._tempVec0;
       this.object.getPositionWorld(origin);
+      origin = [
+        origin[0],
+        0.2,
+        origin[2]
+      ];
       const direction2 = this.object.getForwardWorld(this._tempVec);
       let rayHit = this.rayHit = this.rayCastMode == 0 ? this.engine.scene.rayCast(origin, direction2, 1 << this.floorGroup) : this.engine.physics.rayCast(
+        //physX collision raycast.
         origin,
         direction2,
-        1 << this.floorGroup,
+        1 << this.floorGroup | 1 << this.wallGroup,
         this.maxDistance
       );
-      if (rayHit.hitCount > 0) {
+      if (rayHit.hitCount > 0 && !this.wallHit) {
         this.indicatorHidden = false;
         this._currentIndicatorRotation = this._getCamRotation() - Math.PI;
         this.tempDirectionVector = direction2;
         this.tempYRotation = this.calculateYRotation(this.tempDirectionVector);
         this.rotateToYAxis_withEuler(this.tempYRotation);
-        this.teleportIndicatorMeshObject.active = true;
+        this.teleportArrowAnimation.startAnimation();
         this._hasHit = true;
       } else {
         if (!this.indicatorHidden) {
-          this.teleportIndicatorMeshObject.active = false;
+          this.teleportArrowAnimation.stopAnimation();
           this.indicatorHidden = true;
         }
         this._hasHit = false;
       }
-    } else if (this.teleportIndicatorMeshObject && this.isMouseIndicating) {
+    } else if (this.teleportArrowAnimation && this.isMouseIndicating) {
       this.onMousePressed();
     }
     this._prevThumbstickAxis.set(this._currentStickAxes);
@@ -23102,7 +23374,7 @@ var TeleportFuel3 = class extends Component {
   }
   onMouseUp() {
     this.isMouseIndicating = false;
-    this.teleportIndicatorMeshObject.active = false;
+    this.teleportArrowAnimation.stopAnimation();
     if (this._hasHit) {
       this._teleportPlayer(this.tempYRotation);
     }
@@ -23119,7 +23391,7 @@ var TeleportFuel3 = class extends Component {
     return rotationY;
   }
   rotateIndicator_toCamYAxis() {
-    this.teleportIndicatorMeshObject.setRotationLocal(this.cam.getRotationLocal());
+    this.teleportArrowObject.setRotationLocal(this.cam.getRotationLocal());
   }
   rotateToYAxis_withEuler(YangleToRotate) {
     let rotateAngle = [0, YangleToRotate, 0];
@@ -23129,13 +23401,13 @@ var TeleportFuel3 = class extends Component {
       rotateAngle[1],
       rotateAngle[2]
     );
-    this.teleportIndicatorMeshObject.setRotationLocal(quat_rotateAngle);
+    this.teleportArrowObject.setRotationLocal(quat_rotateAngle);
   }
   tempDirectionVector = [];
   tempYRotation = 0;
   onMousePressed() {
     const direction2 = this.cam.getForward(this._tempVec);
-    this.teleportIndicatorMeshObject.active = true;
+    this.teleportArrowAnimation.startAnimation();
     direction2[1] = 0;
     vec3_exports.normalize(direction2, direction2);
     this._currentIndicatorRotation = -Math.sign(direction2[2]) * Math.acos(direction2[0]) - Math.PI * 0.5;
@@ -23155,13 +23427,14 @@ var TeleportFuel3 = class extends Component {
       oldPosition[2] + this.tempDirectionVector[2] * this.teleportDistance
     ];
     this.camRoot.setPositionWorld(newPosition);
-    this.teleportIndicatorMeshObject.setPositionWorld(newPosition);
+    this.teleportArrowObject.setPositionWorld(newPosition);
   }
 };
 __publicField(TeleportFuel3, "TypeName", "teleport_fuel_3");
 __publicField(TeleportFuel3, "Properties", {
   /** Object that will be placed as indiciation forwhere the player will teleport to. */
-  teleportIndicatorMeshObject: { type: Type.Object },
+  // teleportIndicatorMeshObject: {type: Type.Object},
+  teleportArrowAnimation: { type: Type.Object },
   /** Root of the player, the object that will be positioned on teleportation. */
   camRoot: { type: Type.Object },
   /** Non-vr camera for use outside of VR */
@@ -23178,6 +23451,8 @@ __publicField(TeleportFuel3, "Properties", {
   },
   /** Collision group of valid "floor" objects that can be teleported on */
   floorGroup: { type: Type.Int, default: 1 },
+  /** Collision group of valid "wall " objects that CAN'T be teleported on */
+  wallGroup: { type: Type.Int, default: 1 },
   /** How far the thumbstick needs to be pushed to have the teleport target indicator show up */
   thumbstickActivationThreshhold: { type: Type.Float, default: -0.7 },
   //Originally -0.7
@@ -23193,9 +23468,10 @@ __publicField(TeleportFuel3, "Properties", {
     default: "collision"
   },
   /** Max distance for PhysX raycast */
+  //Set to the teleport Distance variable.
   maxDistance: { type: Type.Float, default: 100 },
   //Fixed Distance for teleports.
-  teleportDistance: Property.float(4.059),
+  //teleportDistance: Property.float(4.059),
   //Local player Reference and more.
   localPlayer: Property.object()
   //local_GM: Property.object()
@@ -23318,6 +23594,14 @@ var _SoundManager = class extends Component {
   //Bullets may need to have a sound asset as well.
   init() {
     console.log("++++++++++++++++++SoundManager starting, located in: " + this.object.parent.name + " +++++++++++++");
+    _SoundManager.BGMSound_source = this.object.addComponent(HowlerAudioSource, {
+      src: _SoundManager.bgmPath + "RACZC_BGM1.mp3",
+      //"Hypnotic-Puzzle.mp3",//this.BGMSoundName,
+      autoplay: true,
+      spatial: false,
+      loop: true,
+      volume: 0.1
+    });
     _SoundManager.gunFiringSound_source = this.object.addComponent(HowlerAudioSource, {
       src: _SoundManager.sfxPath + "LaserShot1.mp3",
       autoplay: false,
@@ -23344,21 +23628,21 @@ var _SoundManager = class extends Component {
       autoplay: false,
       spatial: false,
       loop: false,
-      volume: 0.5
+      volume: 1
     });
     _SoundManager.remote_rocketFiringSound_source = this.remotePlayer_SoundObject.addComponent(HowlerAudioSource, {
       src: _SoundManager.sfxPath + "SpaceCannon.mp3",
       autoplay: false,
       spatial: false,
       loop: false,
-      volume: 0.5
+      volume: 1
     });
     _SoundManager.remote_noAmmoSound_source = this.remotePlayer_SoundObject.addComponent(HowlerAudioSource, {
       src: _SoundManager.sfxPath + "outOfAmmo.wav",
       autoplay: false,
       spatial: false,
       loop: false,
-      volume: 0.5
+      volume: 1
     });
     _SoundManager.localDamageLow_source = this.object.addComponent(HowlerAudioSource, {
       src: _SoundManager.sfxPath + "internalDamage_Low.wav",
@@ -23611,14 +23895,19 @@ var FieldItemCheck = class extends Component {
     this.local_GM = this.local_GM.getComponent(PeerGameManager);
     this.collision = this.object.getComponent(PhysXComponent);
     this.collision.onCollision(
-      this.check_FieldItem_Collision.bind(this)
+      this.check_FieldItem_Wall_Collision.bind(this)
     );
+    this.teleport_fuel_script = this.teleport_fuel_script.getComponent(TeleportFuel3);
   }
-  check_FieldItem_Collision(type, other) {
-    console.log("=============----======-----====--->FieldItemCheck Collider: Var attempt to consume Item: " + this.isAttempting_to_ConsumeItem + ". Collision Type: " + type + ".");
-    if (type === 1 && this.itemDeleted) {
-      this.itemDeleted = false;
-      return;
+  check_FieldItem_Wall_Collision(type, other) {
+    if (type === 1) {
+      if (this.itemDeleted) {
+        this.itemDeleted = false;
+        return;
+      } else {
+        console.log("===========>Wall Hit Test, uncollide: " + other.object.name + ".");
+        this.teleport_fuel_script.wallHit = false;
+      }
     } else {
       const otherObject = other.object;
       if (otherObject.name.includes("Ammo")) {
@@ -23629,6 +23918,9 @@ var FieldItemCheck = class extends Component {
           if (this.items_waitingFor_acquire.length > 0)
             this.delete_waitingItem_fromList(otherObject.objectId);
         }
+      } else if (otherObject.name.includes("Wall")) {
+        console.log("===========>Wall Hit Test, collide: " + other.object.name + ".");
+        this.teleport_fuel_script.wallHit = true;
       }
     }
   }
@@ -23711,11 +24003,14 @@ __publicField(FieldItemCheck, "TypeName", "FieldItemCheck");
 /* Properties that are configurable in the editor */
 __publicField(FieldItemCheck, "Properties", {
   LocalPlayer: Property.object(),
-  local_GM: Property.object()
+  local_GM: Property.object(),
+  teleport_fuel_script: Property.object()
 });
 
 // js/Players/PlayerData.js
 var PlayerData = class extends Component {
+  //Weapon Order:
+  weaponOrder_array = ["Gun", "RocketLauncher", "Shield"];
 };
 __publicField(PlayerData, "TypeName", "PlayerData");
 /* Properties that are configurable in the editor */
@@ -23728,6 +24023,7 @@ __publicField(PlayerData, "Properties", {
   moveNoFuelWait: Property.float(2),
   moveRechargeSpeed: Property.float(2),
   //it takes 4 seconds to charge from 0 energy to max Energy. 
+  teleportDistance: Property.float(1.157),
   //Cockpit reset Variables.
   cockpitReset_waitTime: Property.float(2),
   cockpitReset_pilotDistance: Property.float(0.19),
@@ -23825,11 +24121,12 @@ var ArmOffset = class extends Component {
     if (isInSittingMode) {
       if (handNameString === "pilot") {
         this.Xoffset = 0;
-        this.Yoffset = 0.2;
-        this.Zoffset = 0.2;
+        this.Yoffset = 0.25;
+        this.Zoffset = 0.15;
         this.XrotationOffset = 0;
       } else {
-        this.Yoffset = 0.24;
+        this.Yoffset = 0.35;
+        this.Zoffset = -0.2;
       }
       this.isReady = true;
     } else {
@@ -23896,16 +24193,6 @@ __publicField(ArmOffset, "Properties", {
 });
 
 // js/Players/LocalPlayer.js
-var __decorate8 = function(decorators, target, key, desc) {
-  var c = arguments.length, r = c < 3 ? target : desc === null ? desc = Object.getOwnPropertyDescriptor(target, key) : desc, d;
-  if (typeof Reflect === "object" && typeof Reflect.decorate === "function")
-    r = Reflect.decorate(decorators, target, key, desc);
-  else
-    for (var i = decorators.length - 1; i >= 0; i--)
-      if (d = decorators[i])
-        r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
-  return c > 3 && r && Object.defineProperty(target, key, r), r;
-};
 var statusMessage_type = class {
 };
 //Message states that are displayed in the status message UI.
@@ -23913,50 +24200,20 @@ __publicField(statusMessage_type, "ammoGet", 0);
 __publicField(statusMessage_type, "matchOver", 2);
 var tempTransform = new Float32Array(8);
 var LocalPlayer = class extends Component {
-  //Reference to the Game Manager.
-  local_GM;
   // Dual quaternions for sending head, left and right hand transforms
-  playerPosWorld = [];
-  //used to determine the position offset.
+  //playerPosWorld= [];    //used to determine the position offset.
   cockpitDualQuat = new Float32Array(8);
   robotRightHandDualQuat = new Float32Array(8);
   robotLeftHandDualQuat = new Float32Array(8);
   coreDualQuat = new Float32Array(8);
-  arrowCursor;
-  fieldItemChecker;
-  //script, currently parented to the arrowCursor.
+  //arrowCursor;
+  // fieldItemChecker; //script, currently parented to the arrowCursor.
   //GamepadInput Variables. Event listeners for the Gamepad object are limited.
   InputManager;
-  //Player's Object transforms.
-  //Originally:
-  //robotCockpit, robotRightHand, robotLeftHand.
-  //Is sent to the server.
-  robotCockpit = null;
-  //the root of the robot cockpit, not the cockpitMesh.
-  robotRightHand = null;
-  //robotRightWeapon
-  robotLeftHand = null;
-  //robotLeftWeapon
-  //Cockpit object.
-  pilotHead = null;
-  //The player's head updates the pilotHead.
-  pilotRightHand = null;
-  // inputEvents are received here.
-  pilotLeftHand = null;
-  // inputEvents are received here.
-  pilotAvatarRightHand = null;
-  // object with pilot RHand mesh.
-  pilotAvatarLeftHand = null;
-  // object with pilot LHand mesh.
-  //Core (Robot Base) Object, with boosters as Children.
-  robotCore = null;
   //Player's initial values for Position, and Rotation.
   playerStartTransforms;
   //an array of 4 elements for Head and Limb Transform data.
   //PlayerAttributes.
-  //Data regarding the Basic Player. 
-  //The data below is initialized from variables in this class.
-  PlayerData = null;
   //Player State;
   currentState;
   //HP.
@@ -23971,12 +24228,6 @@ var LocalPlayer = class extends Component {
   //Damage-related attributes.
   //Normal Material is a temporary variable that stores the current head, left and right materials.
   normalMaterials = [];
-  cockpitDamage_material;
-  externalDamage_material;
-  shieldDestroyed_material;
-  shieldDamaged_material;
-  shieldOriginal_material;
-  time_toShow_Damage = 0.8;
   //Cockpit or Base update Move timeout variable.
   robotDamageTimeout = null;
   shieldDamageTimeout = null;
@@ -23995,8 +24246,6 @@ var LocalPlayer = class extends Component {
   //The player will use the controller buttons to perform the weapons switch.
   currentLWeaponIndex = 0;
   currentRWeaponIndex = 0;
-  LweaponsList = null;
-  RweaponsList = null;
   //Weapon-Delay vars. 
   //Originally for only the Rocket but will add to other weapons as well.
   canRocketFire = true;
@@ -24034,20 +24283,19 @@ var LocalPlayer = class extends Component {
   //Status variable.
   //isAttempting_to_ConsumeItem=false;
   //Head Movement Type vars.
-  isCockpit_following_pilotHead = true;
+  isCockpit_following_pilotHead = false;
   //Basic Setup Functions.
   startPlayer() {
     this.local_GM = this.local_GM.getComponent(PeerGameManager);
-    let fieldItemObject = this.arrowCursor.children[0];
-    this.fieldItemChecker = fieldItemObject.getComponent(FieldItemCheck);
     console.log("##################Local Player, local_GM's inPCMode is: " + this.local_GM.isInPCMode);
     if (this.local_GM.isInPCMode) {
       let myTeleport = this.robotCockpit.parent.children[2].getComponent(TeleportFuel3);
       myTeleport.active = false;
-      let robot_fieldItemCollider = this.arrowCursor.children[0];
-      robot_fieldItemCollider.parent = this.robotCore;
-      robot_fieldItemCollider.setPositionLocal([0, -2.474, -8.237]);
+      this.arrowCursor_CollideChecker.parent = this.robotCore;
+      this.arrowCursor_CollideChecker.setPositionLocal([0, 0, -0.616]);
+      console.log("##################Local Player, field item Collider pos: " + this.arrowCursor_CollideChecker.getPositionWorld());
     }
+    this.arrowCursor_CollideChecker = this.arrowCursor_CollideChecker.getComponent(FieldItemCheck);
     this.InputManager = this.InputManager.getComponent(InputManager);
     this.InputManager.startManager();
     this.playerStartTransforms = [
@@ -24065,8 +24313,24 @@ var LocalPlayer = class extends Component {
         this.check_pilot2Cockpit_distance.bind(this),
         this.PlayerData.cockpitReset_waitTime * 1e3
       );
-    this.LweaponsList = this.LweaponsList.children;
-    this.RweaponsList = this.RweaponsList.children;
+    let temp_LweaponsList = this.LweaponsList.children;
+    let temp_RweaponsList = this.RweaponsList.children;
+    this.LweaponsList = [];
+    this.RweaponsList = [];
+    for (let i = 0; i < this.PlayerData.weaponOrder_array.length; i++) {
+      for (let j = 0; j < temp_LweaponsList.length; j++) {
+        if (this.PlayerData.weaponOrder_array[i] === temp_LweaponsList[j].name) {
+          this.LweaponsList.push(temp_LweaponsList[j]);
+          break;
+        }
+      }
+      for (let j = 0; j < temp_RweaponsList.length; j++) {
+        if (this.PlayerData.weaponOrder_array[i] === temp_RweaponsList[j].name) {
+          this.RweaponsList.push(temp_RweaponsList[j]);
+          break;
+        }
+      }
+    }
     for (let i = 0; i < this.LweaponsList.length; i++) {
       if (this.LweaponsList[i].name === "Shield")
         this.LShield_index = i;
@@ -24105,8 +24369,7 @@ var LocalPlayer = class extends Component {
       //Cockpit (Interior)
       this.robotCore.getComponent(MeshComponent).material,
       //Core
-      this.robotCore.children[0].children[0].getComponent(MeshComponent).material,
-      //Booster Material
+      //this.robotCore.children[0].children[0].getComponent(MeshComponent).material,      //Booster Material
       this.RweaponsList[this.currentRWeaponIndex].getComponent(MeshComponent).material,
       //Right Hand
       this.LweaponsList[this.currentLWeaponIndex].getComponent(MeshComponent).material
@@ -24134,6 +24397,8 @@ var LocalPlayer = class extends Component {
         ]
       );
     }
+  }
+  setup_weaponList_Array() {
   }
   update_StandingSittingMode_Offsets() {
     let pilotHeadPos = this.pilotHead.getPositionWorld();
@@ -24290,8 +24555,7 @@ var LocalPlayer = class extends Component {
       //Cockpit (Interior)
       this.robotCore.getComponent(MeshComponent).material,
       //Core
-      this.robotCore.children[0].children[0].getComponent(MeshComponent).material,
-      //Booster Material
+      //this.robotCore.children[0].children[0].getComponent(MeshComponent).material,      //Booster Material
       this.RweaponsList[this.currentRWeaponIndex].getComponent(MeshComponent).material,
       //Right Hand
       this.LweaponsList[this.currentLWeaponIndex].getComponent(MeshComponent).material
@@ -24312,6 +24576,8 @@ var LocalPlayer = class extends Component {
   }
   //------------------------------------Function to Rotate the Player character.
   rotate(eulerAngle, isGoingClockwise, axis = "Y") {
+    if (!this.local_GM.isGameInProgress() && !this.local_GM.isInSoloMode)
+      return;
     if (eulerAngle === null)
       eulerAngle = this.PlayerData.rotateEulerAngle;
     let currentRotation = this.object.getRotationWorld();
@@ -24522,11 +24788,9 @@ var LocalPlayer = class extends Component {
       console.log("==========Disabling the Local Shield.");
       this.RShield_isRespawning = true;
       this.RweaponsList[this.RShield_index].getComponent(MeshComponent).material = this.shieldDestroyed_material;
-      this.RweaponsList[this.RShield_index].children[0].active = false;
     } else {
       this.LShield_isRespawning = true;
       this.LweaponsList[this.LShield_index].getComponent(MeshComponent).material = this.shieldDestroyed_material;
-      this.LweaponsList[this.LShield_index].children[0].active = false;
     }
     this.local_GM.sendNetworkMessage({
       shieldDestroyed: whichHand
@@ -24656,7 +24920,7 @@ var LocalPlayer = class extends Component {
     if (whichHand === "right" && weaponIndex === this.currentRWeaponIndex || whichHand === "left" && weaponIndex === this.currentLWeaponIndex)
       this.updateAmmoUI(whichHand, weaponIndex);
     if (ammoAmount < 0) {
-      this.fieldItemChecker.check_waitingItems_onStatusChanged();
+      this.arrowCursor_CollideChecker.check_waitingItems_onStatusChanged();
     }
   }
   currentWeapon_hasAmmo(whichHand) {
@@ -24720,14 +24984,11 @@ var LocalPlayer = class extends Component {
   }
   showDamageSequence() {
     if (this.robotDamageTimeout === null) {
-      this.normalMaterials[3] = this.RweaponsList[this.currentRWeaponIndex].getComponent(MeshComponent).material;
-      this.normalMaterials[4] = this.LweaponsList[this.currentLWeaponIndex].getComponent(MeshComponent).material;
+      this.normalMaterials[2] = this.RweaponsList[this.currentRWeaponIndex].getComponent(MeshComponent).material;
+      this.normalMaterials[3] = this.LweaponsList[this.currentLWeaponIndex].getComponent(MeshComponent).material;
     }
     this.robotCockpit.getComponent(MeshComponent).material = this.cockpitDamage_material;
     this.robotCore.getComponent(MeshComponent).material = this.externalDamage_material;
-    for (let i = 0; i < this.robotCore.children[0].children.length; i++) {
-      this.robotCore.children[0].children[i].getComponent(MeshComponent).material = this.externalDamage_material;
-    }
     this.RweaponsList[this.currentRWeaponIndex].getComponent(MeshComponent).material = this.externalDamage_material;
     this.LweaponsList[this.currentLWeaponIndex].getComponent(MeshComponent).material = this.externalDamage_material;
     if (this.robotDamageTimeout !== null) {
@@ -24738,11 +24999,8 @@ var LocalPlayer = class extends Component {
       function() {
         this.robotCockpit.getComponent(MeshComponent).material = this.normalMaterials[0];
         this.robotCore.getComponent(MeshComponent).material = this.normalMaterials[1];
-        for (let i = 0; i < this.robotCore.children[0].children.length; i++) {
-          this.robotCore.children[0].children[i].getComponent(MeshComponent).material = this.normalMaterials[2];
-        }
-        this.RweaponsList[this.currentRWeaponIndex].getComponent(MeshComponent).material = this.normalMaterials[3];
-        this.LweaponsList[this.currentLWeaponIndex].getComponent(MeshComponent).material = this.normalMaterials[4];
+        this.RweaponsList[this.currentRWeaponIndex].getComponent(MeshComponent).material = this.normalMaterials[2];
+        this.LweaponsList[this.currentLWeaponIndex].getComponent(MeshComponent).material = this.normalMaterials[3];
         this.robotDamageTimeout = null;
       }.bind(this),
       this.time_toShow_Damage * 1e3
@@ -24775,25 +25033,13 @@ var LocalPlayer = class extends Component {
   }
   //--------Energy Movement System Functions.
   moveStep_EventReceived() {
-    let isEnoughEnergy = this.fuel >= this.PlayerData.moveCost;
-    if (!isEnoughEnergy || this.robotDamageTimeout !== null) {
-      SoundManager.playSound(soundType.movement, "noFuel");
+    let moveSuccesful = false;
+    if (!this.local_GM.isGameInProgress() && !this.local_GM.isInSoloMode) {
     } else {
-      this.fuel -= this.PlayerData.moveCost;
-      if (this.fuel < 0)
-        this.fuel = 0;
-      this.updateFuelBar();
       SoundManager.playSound(soundType.movement);
+      moveSuccesful = true;
     }
-    this.isRechargingFuel = false;
-    if (this.moveRechargeTimeout !== null) {
-      clearTimeout(this.moveRechargeTimeout);
-    }
-    if (this.fuel > 0)
-      this.moveRechargeTimeout = this.start_EnergyRecovery_Sequence(this.PlayerData.moveNoFuelWait);
-    else
-      this.moveRechargeTimeout = this.start_EnergyRecovery_Sequence(this.PlayerData.moveNoFuelWait * 1.3);
-    return isEnoughEnergy;
+    return moveSuccesful;
   }
   start_EnergyRecovery_Sequence(delayTime) {
     return setTimeout(
@@ -24871,98 +25117,71 @@ var LocalPlayer = class extends Component {
       this.statusMessage.getComponent(TextComponent).active = false;
     }.bind(this), this.PlayerData.statusMessage_displayTime * 1e3);
   }
+  //Result Panel functions
+  // showResultsPanel(resultsMassage, newColor)
+  // {                
+  //     this.results.text = resultsMassage;
+  //     this.results.material.color = newColor;
+  //     this.resultsPanel.active = true;
+  //     this.resultsText.active = true;
+  // }
+  // hideResultsPanel(resultsMassage){
+  //     this.results.text = resultsMassage;
+  //     this.resultsPanel.active = false;
+  //     this.resultsText.active = false;
+  //     this.waitText.active = false;
+  // }
 };
 __publicField(LocalPlayer, "TypeName", "local-player");
-__decorate8([
-  property.object()
-], LocalPlayer.prototype, "local_GM", void 0);
-__decorate8([
-  property.object()
-], LocalPlayer.prototype, "PlayerData", void 0);
-__decorate8([
-  property.object()
-], LocalPlayer.prototype, "robotCockpit", void 0);
-__decorate8([
-  property.object()
-], LocalPlayer.prototype, "robotRightHand", void 0);
-__decorate8([
-  property.object()
-], LocalPlayer.prototype, "robotLeftHand", void 0);
-__decorate8([
-  property.object()
-], LocalPlayer.prototype, "pilotHead", void 0);
-__decorate8([
-  property.object()
-], LocalPlayer.prototype, "pilotRightHand", void 0);
-__decorate8([
-  property.object()
-], LocalPlayer.prototype, "pilotLeftHand", void 0);
-__decorate8([
-  property.object()
-], LocalPlayer.prototype, "pilotAvatarRightHand", void 0);
-__decorate8([
-  property.object()
-], LocalPlayer.prototype, "pilotAvatarLeftHand", void 0);
-__decorate8([
-  property.object()
-], LocalPlayer.prototype, "robotCore", void 0);
-__decorate8([
-  property.material()
-], LocalPlayer.prototype, "cockpitDamage_material", void 0);
-__decorate8([
-  property.material()
-], LocalPlayer.prototype, "externalDamage_material", void 0);
-__decorate8([
-  property.float(0.5)
-], LocalPlayer.prototype, "time_toShow_Damage", void 0);
-__decorate8([
-  property.material()
-], LocalPlayer.prototype, "shieldDestroyed_material", void 0);
-__decorate8([
-  property.material()
-], LocalPlayer.prototype, "shieldDamaged_material", void 0);
-__decorate8([
-  property.object()
-], LocalPlayer.prototype, "LweaponsList", void 0);
-__decorate8([
-  property.object()
-], LocalPlayer.prototype, "RweaponsList", void 0);
-__decorate8([
-  property.object()
-], LocalPlayer.prototype, "InputManager", void 0);
-__decorate8([
-  property.object()
-], LocalPlayer.prototype, "HPBar", void 0);
-__decorate8([
-  property.object()
-], LocalPlayer.prototype, "FuelBar", void 0);
-__decorate8([
-  property.object()
-], LocalPlayer.prototype, "LAmmoUI", void 0);
-__decorate8([
-  property.object()
-], LocalPlayer.prototype, "RAmmoUI", void 0);
-__decorate8([
-  property.object()
-], LocalPlayer.prototype, "statusMessage", void 0);
-__decorate8([
-  property.object()
-], LocalPlayer.prototype, "LTargetCursor ", void 0);
-__decorate8([
-  property.object()
-], LocalPlayer.prototype, "RTargetCursor", void 0);
-__decorate8([
-  property.material()
-], LocalPlayer.prototype, "normal_AmmoUI_mat", void 0);
-__decorate8([
-  property.material()
-], LocalPlayer.prototype, "empty_AmmoUI_mat", void 0);
-__decorate8([
-  property.material()
-], LocalPlayer.prototype, "full_AmmoUI_mat", void 0);
-__decorate8([
-  property.object()
-], LocalPlayer.prototype, "arrowCursor", void 0);
+__publicField(LocalPlayer, "Properties", {
+  //Local Game Manager Instance.
+  local_GM: Property.object(),
+  //Player Data holds Player attribute information.
+  PlayerData: Property.object(),
+  //Pilot & Robot Transforms.
+  //Robot
+  robotCockpit: Property.object(),
+  robotRightHand: Property.object(),
+  robotLeftHand: Property.object(),
+  robotCore: Property.object(),
+  //Pilot
+  pilotHead: Property.object(),
+  pilotRightHand: Property.object(),
+  pilotLeftHand: Property.object(),
+  //Pilot Avatar Hands.
+  pilotAvatarLeftHand: Property.object(),
+  pilotAvatarRightHand: Property.object(),
+  //Damage Reference Material.
+  cockpitDamage_material: Property.material(),
+  // innerCockpitDamage_material: Property.material(),
+  externalDamage_material: Property.material(),
+  shieldDestroyed_material: Property.material(),
+  time_toShow_Damage: Property.float(0.5),
+  //Weapons Data.
+  LweaponsList: Property.object(),
+  RweaponsList: Property.object(),
+  //Input Manager.
+  InputManager: Property.object(),
+  //Local Player's UI Assets.
+  HPBar: Property.object(),
+  FuelBar: Property.object(),
+  LAmmoUI: Property.object(),
+  RAmmoUI: Property.object(),
+  statusMessage: Property.object(),
+  LTargetCursor: Property.object(),
+  RTargetCursor: Property.object(),
+  //Ammo UI Display Variables.
+  normal_AmmoUI_mat: Property.material(),
+  empty_AmmoUI_mat: Property.material(),
+  full_AmmoUI_mat: Property.material(),
+  //Cursor for player navigation.
+  arrowCursor: Property.object(),
+  arrowCursor_CollideChecker: Property.object(),
+  //Results Panel variables.
+  resultsPanel: Property.object(),
+  resultsText: Property.object(),
+  waitText: Property.object()
+});
 
 // js/Weapons/WeaponManager.js
 var WeaponManager = class extends Component {
@@ -24980,12 +25199,32 @@ var WeaponManager = class extends Component {
   //used for Firing the Bullet.
   bulletSpawnPointL;
   bulletSpawnPointR;
+  //Shield material variables.
+  shieldDamaged_material;
   //One more shield-related var.
   shieldOriginal_material;
   shieldDamageTimeout;
-  init() {
-    this.LweaponsList = this.LweaponsList.children;
-    this.RweaponsList = this.RweaponsList.children;
+  initWeaponManager(playerData) {
+    console.log("$$$$$$$$$$$$$$$$ Remote Player's Weapon Manager, playerData: ");
+    console.log(playerData);
+    let temp_LweaponsList = this.LweaponsList.children;
+    let temp_RweaponsList = this.RweaponsList.children;
+    this.LweaponsList = [];
+    this.RweaponsList = [];
+    for (let i = 0; i < playerData.weaponOrder_array.length; i++) {
+      for (let j = 0; j < temp_LweaponsList.length; j++) {
+        if (playerData.weaponOrder_array[i] === temp_LweaponsList[j].name) {
+          this.LweaponsList.push(temp_LweaponsList[j]);
+          break;
+        }
+      }
+      for (let j = 0; j < temp_RweaponsList.length; j++) {
+        if (playerData.weaponOrder_array[i] === temp_RweaponsList[j].name) {
+          this.RweaponsList.push(temp_RweaponsList[j]);
+          break;
+        }
+      }
+    }
     for (let i = 0; i < this.LweaponsList.length; i++) {
       if (this.LweaponsList[i].name === "Shield")
         this.LShield_index = i;
@@ -25013,13 +25252,13 @@ var WeaponManager = class extends Component {
     this.LShield_isRespawning = false;
     this.RShield_isRespawning = false;
   }
-  test() {
+  setShieldData(shieldDataDict) {
   }
   setShieldRespawnTime(newShieldRespawnTime) {
     this.shield_respawnTime = newShieldRespawnTime;
   }
   //Weapons Management Functions.
-  //--------->Weapon management functions. These functions are simpler than in the Local Player. 
+  //--------->Weapon management functions. These functions are simpler than in the Local Player.
   //(It is assumed that the indexes are verified over in the Local Side, no need to re-verify bounds in the Remote Side.)
   switchWeapon(whichHand, whichIndex) {
     if (whichHand === "right") {
@@ -25032,7 +25271,7 @@ var WeaponManager = class extends Component {
       this.currentLWeaponIndex = whichIndex;
     }
   }
-  //-----Weapon activation and deactivation: 
+  //-----Weapon activation and deactivation:
   //this function is the same as in the Local Player (only involves hiding and showing components).
   activateWeapon_inList(whichHand, index) {
     console.log();
@@ -25060,7 +25299,7 @@ var WeaponManager = class extends Component {
         this.LweaponsList[index].children[i].active = state;
     }
   }
-  //Shield management functions: similar to the Local Player's, but shorter. 
+  //Shield management functions: similar to the Local Player's, but shorter.
   //(no network callback needed.)
   damageShield(whichHand) {
     SoundManager.playSound(soundType.shield, "damage");
@@ -25096,30 +25335,16 @@ var WeaponManager = class extends Component {
         this.setWeaponState(whichHand, this.currentLWeaponIndex, true);
     }
   }
-  update(dt) {
-  }
 };
 __publicField(WeaponManager, "TypeName", "WeaponManager");
 /* Properties that are configurable in the editor */
 __publicField(WeaponManager, "Properties", {
   LweaponsList: Property.object(),
   RweaponsList: Property.object(),
-  //Shield related vars.
-  shieldDamaged_material: Property.material(),
   shieldDestroyed_material: Property.material()
 });
 
 // js/Players/RemotePlayer.js
-var __decorate9 = function(decorators, target, key, desc) {
-  var c = arguments.length, r = c < 3 ? target : desc === null ? desc = Object.getOwnPropertyDescriptor(target, key) : desc, d;
-  if (typeof Reflect === "object" && typeof Reflect.decorate === "function")
-    r = Reflect.decorate(decorators, target, key, desc);
-  else
-    for (var i = decorators.length - 1; i >= 0; i--)
-      if (d = decorators[i])
-        r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
-  return c > 3 && r && Object.defineProperty(target, key, r), r;
-};
 var tempTransform2 = new Float32Array(8);
 var PeerNetworkedPlayer = class extends Component {
   /* Properties that are configurable in the editor */
@@ -25143,10 +25368,7 @@ var PeerNetworkedPlayer = class extends Component {
   //The damage material will be: Red for arms, RedCockpit Transparent Material for the cockpit. 
   // damageMaterial=[];         
   //Damage reference materials will be public variables.
-  //damageReferenceMaterials= []. array.
-  //time_toShow_Damage= 0.8;
-  cockpitDamage_material;
-  externalDamage_material;
+  //damageReferenceMaterials= []. array.            
   //Cockpit or Base update Move timeout variable.
   robotDamageTimeout = null;
   //----------->Setup Functions.
@@ -25165,7 +25387,9 @@ var PeerNetworkedPlayer = class extends Component {
     }
     const HPscale = this.HPBar.getScalingLocal();
     this.maxHPScale = HPscale[1];
+    this.PlayerData = this.PlayerData.getComponent(PlayerData);
     this.WeaponsManager = this.WeaponsManager.getComponent(WeaponManager);
+    this.WeaponsManager.initWeaponManager(this.PlayerData);
     this.resetPlayerValues();
   }
   //-----------------
@@ -25238,8 +25462,7 @@ var PeerNetworkedPlayer = class extends Component {
       //cockpit, Body, Cockpit.
       this.core.getComponent(MeshComponent).material,
       //Core
-      this.boostersGroup.children[0].getComponent(MeshComponent).material,
-      //Boosters 
+      //this.boostersGroup.children[0].getComponent(MeshComponent).material, //Boosters 
       this.WeaponsManager.RweaponsList[this.WeaponsManager.currentRWeaponIndex].getComponent(MeshComponent).material,
       //Right Hand
       this.WeaponsManager.LweaponsList[this.WeaponsManager.currentLWeaponIndex].getComponent(MeshComponent).material
@@ -25258,7 +25481,6 @@ var PeerNetworkedPlayer = class extends Component {
   }
   //---------->UI and Visual functions.
   damageUpdate_fromLocalPlayer(data) {
-    console.log("============RemotePlayer, data from update_fromLocalPlayer(): ", data);
     this.updateHP(data.damageRemoteHP, data.maxHP);
     this.showDamageSequence();
     let isLocal = false;
@@ -25269,31 +25491,23 @@ var PeerNetworkedPlayer = class extends Component {
     );
   }
   showDamageSequence() {
-    console.log("=================Remote Player(), Starting Damage Sequence.");
     if (this.robotDamageTimeout === null) {
-      this.normalMaterials[3] = this.WeaponsManager.RweaponsList[this.WeaponsManager.currentRWeaponIndex].getComponent(MeshComponent).material;
-      this.normalMaterials[4] = this.WeaponsManager.LweaponsList[this.WeaponsManager.currentLWeaponIndex].getComponent(MeshComponent).material;
+      this.normalMaterials[2] = this.WeaponsManager.RweaponsList[this.WeaponsManager.currentRWeaponIndex].getComponent(MeshComponent).material;
+      this.normalMaterials[3] = this.WeaponsManager.LweaponsList[this.WeaponsManager.currentLWeaponIndex].getComponent(MeshComponent).material;
     }
     this.cockpit.children[0].getComponent(MeshComponent).material = this.externalDamage_material;
     this.core.getComponent(MeshComponent).material = this.externalDamage_material;
-    for (let i = 0; i < this.boostersGroup.children.length; i++) {
-      this.boostersGroup.children[i].getComponent(MeshComponent).material = this.externalDamage_material;
-    }
     this.WeaponsManager.RweaponsList[this.WeaponsManager.currentRWeaponIndex].getComponent(MeshComponent).material = this.externalDamage_material;
     this.WeaponsManager.LweaponsList[this.WeaponsManager.currentLWeaponIndex].getComponent(MeshComponent).material = this.externalDamage_material;
     if (this.robotDamageTimeout !== null) {
-      console.log("===========clearing the Damage Timeout.");
       clearTimeout(this.robotDamageTimeout);
     }
     this.robotDamageTimeout = setTimeout(
       function() {
         this.cockpit.children[0].getComponent(MeshComponent).material = this.normalMaterials[0];
         this.core.getComponent(MeshComponent).material = this.normalMaterials[1];
-        for (let i = 0; i < this.boostersGroup.children.length; i++) {
-          this.boostersGroup.children[i].getComponent(MeshComponent).material = this.normalMaterials[2];
-        }
-        this.WeaponsManager.RweaponsList[this.WeaponsManager.currentRWeaponIndex].getComponent(MeshComponent).material = this.normalMaterials[3];
-        this.WeaponsManager.LweaponsList[this.WeaponsManager.currentLWeaponIndex].getComponent(MeshComponent).material = this.normalMaterials[4];
+        this.WeaponsManager.RweaponsList[this.WeaponsManager.currentRWeaponIndex].getComponent(MeshComponent).material = this.normalMaterials[2];
+        this.WeaponsManager.LweaponsList[this.WeaponsManager.currentLWeaponIndex].getComponent(MeshComponent).material = this.normalMaterials[3];
         this.robotDamageTimeout = null;
         console.log("===========Finished the Remote Damage Timeout.");
       }.bind(this),
@@ -25327,21 +25541,18 @@ var PeerNetworkedPlayer = class extends Component {
   }
 };
 __publicField(PeerNetworkedPlayer, "TypeName", "peer-networked-player");
-__decorate9([
-  property.object()
-], PeerNetworkedPlayer.prototype, "WeaponsManager", void 0);
-__decorate9([
-  property.material()
-], PeerNetworkedPlayer.prototype, "cockpitDamage_material", void 0);
-__decorate9([
-  property.material()
-], PeerNetworkedPlayer.prototype, "externalDamage_material", void 0);
-__decorate9([
-  property.float(0.4)
-], PeerNetworkedPlayer.prototype, "time_toShow_Damage", void 0);
-__decorate9([
-  property.object()
-], PeerNetworkedPlayer.prototype, "HPBar", void 0);
+__publicField(PeerNetworkedPlayer, "Properties", {
+  //Weapon Manager.
+  WeaponsManager: Property.object(),
+  //damage Reference Materials.
+  cockpitDamage_material: Property.material(),
+  externalDamage_material: Property.material(),
+  time_toShow_Damage: Property.float(0.4),
+  //UI vars.
+  HPBar: Property.object(),
+  //Other data.
+  PlayerData: Property.object()
+});
 
 // js/Weapons/weaponData.js
 var weaponData = class extends Component {
@@ -26422,7 +26633,7 @@ __publicField(PeerNetworkedPlayerSpawner, "Properties", {
 });
 
 // js/PeerGameManager.js
-var __decorate10 = function(decorators, target, key, desc) {
+var __decorate8 = function(decorators, target, key, desc) {
   var c = arguments.length, r = c < 3 ? target : desc === null ? desc = Object.getOwnPropertyDescriptor(target, key) : desc, d;
   if (typeof Reflect === "object" && typeof Reflect.decorate === "function")
     r = Reflect.decorate(decorators, target, key, desc);
@@ -26460,8 +26671,8 @@ var PeerGameManager = class extends Component {
   //Client variable: data for connection with the host.
   connectionId = null;
   //Level UI Elements:
-  FrontText;
-  BackText;
+  // FrontText;
+  // BackText;
   ButtonConfig_Parent;
   //Player Management:
   clientPosSwitched = false;
@@ -26486,17 +26697,25 @@ var PeerGameManager = class extends Component {
   //For PC debugging.
   isInPCMode = false;
   isOculusQuest = false;
+  isUsingLocalServer = false;
   //Solo Mode means that:
   // No Level Design is Present.
   // No connection to a network is necessary. Only offline play is allowed.
   // Players can shoot and move over a small space.
   isInSoloMode = true;
   isUsing_FieldItemManager = true;
+  isUsing_BarrierManager = false;
   /* Properties: Public vars displayed in the Editor.  */
   serverId = "THISISAWONDERLANDENGINEPLACEHOLDER";
   networkSendFrequencyInS = 0.01;
   networkPlayerPool = null;
   voiceEnabled = false;
+  CockpitUI;
+  startCount = 3;
+  resetCount = 5;
+  disconnectCount = 5;
+  hostWin = 0;
+  clientWin = 0;
   //----------Setup functions.
   generateServerId() {
     const date = /* @__PURE__ */ new Date();
@@ -26513,10 +26732,12 @@ var PeerGameManager = class extends Component {
   }
   //Status check function.
   isGameInProgress() {
-    if ((this.isHost && this.connections.length || this.connection) && !this.isMatchOver)
+    console.log("@@@@@@@@@@@@@ isGameInProgress: countdownFinish? " + this.CockpitUI.countdownFinish + ".");
+    if ((this.isHost && this.connections.length || this.connection) && this.CockpitUI.countdownFinish && !this.isMatchOver && this.inPlay) {
       return true;
-    else
+    } else {
       return false;
+    }
   }
   //Initializing the Peer Manager. 
   //Doing all preparations AFTER the isSessionSupported Promise Result is fetched, 
@@ -26539,11 +26760,17 @@ var PeerGameManager = class extends Component {
         }.bind(this)
       );
     }
+    window.addEventListener("beforeunload", function(e) {
+      if (this.isHost && this.connections.length) {
+        const clientConnection = this.connections[0];
+        clientConnection.close();
+      } else if (this.connection)
+        this.connection.close();
+    });
   }
   initPeerManager() {
     console.log("===========>in PeerGameManager: running initPeerManager().");
     Peer = require_bundler().Peer;
-    this.generateServerId();
     this.audio = document.createElement("audio");
     this.audio.id = "localAudio";
     document.body.appendChild(this.audio);
@@ -26562,34 +26789,79 @@ var PeerGameManager = class extends Component {
     this.FieldItemManager = this.FieldItemManager.getComponent(ItemManager);
     if (this.isUsing_FieldItemManager)
       this.FieldItemManager.setupItemManager();
+    this.CockpitUI = this.CockpitUIManager.getComponent(CockpitUIManager);
+    this.inMain = true;
+    this.inPlay = false;
+    this.inMatchResult = false;
+    this.inFinalResult = false;
   }
   //---------------------Match Ended Functions. Session Restarting Functions.
-  matchFinishedSequence(isRemote = false) {
+  timeOver_ClientHPRequest() {
+    this.sendNetworkMessage("HP Request");
+  }
+  timeOver_ClientHPReceived(clientHP) {
+    this.hostHP = this.LocalPlayer_component.HP;
+    if (this.CockpitUI.timeOver === true) {
+      if (this.hostHP > clientHP) {
+        this.matchFinishedSequence(false, true);
+      } else if (this.hostHP < clientHP) {
+        this.matchFinishedSequence(false, false);
+      }
+    } else if (this.CockpitUI.extraMatch === true) {
+      console.log("!!!!!");
+      if (this.hostHP > clientHP) {
+        this.matchFinishedSequence(false, true);
+      } else if (this.hostHP < clientHP) {
+        this.matchFinishedSequence(false, false);
+      }
+    }
+  }
+  matchFinishedSequence(isRemote = false, isWinner = false) {
     console.log("**************Match Finished Sequence.");
     this.isMatchOver = true;
     this.isPlayingAgain = true;
     this.FieldItemManager.isReady = false;
-    this.BackText.active = true;
-    this.FrontText.active = true;
-    if (isRemote) {
-      this.modifyText(this.FrontText, "-You Win!-", [0, 0, 1, 1]);
-      this.modifyText(this.BackText, "-You Win!-", [0, 0, 1, 1]);
-    } else {
-      this.modifyText(this.FrontText, "-You Lose-", [1, 0, 0, 1]);
-      this.modifyText(this.BackText, "-You Lose-", [1, 0, 0, 1]);
-    }
-    if (!isRemote) {
-      const messageToRemote = "matchWin";
+    this.inPlay = false;
+    this.CockpitUI.extraMatch = false;
+    if (isWinner) {
+      this.CockpitUI.showResultsImage("win");
       if (this.isHost) {
-        if (this.connections.length) {
-          const clientConnection = this.connections[0];
-          clientConnection.send(messageToRemote);
-        }
+        this.hostWin++;
       } else if (this.connection) {
-        this.connection.send(messageToRemote);
+        this.clientWin++;
+      }
+    } else {
+      this.CockpitUI.showResultsImage("lose");
+      if (this.isHost) {
+        this.clientWin++;
+      } else if (this.connection) {
+        this.hostWin++;
       }
     }
-    setTimeout(this.disconnectLocalManager.bind(this), 4e3);
+    if (!isRemote) {
+      var messageToRemote;
+      if (isWinner) {
+        messageToRemote = "matchLose";
+      } else {
+        messageToRemote = "matchWin";
+      }
+      this.sendNetworkMessage(messageToRemote);
+    }
+    console.log("#####The host is win? How many times?", this.hostWin);
+    console.log("#####The client is win? How many times?", this.clientWin);
+    if (this.hostWin === 2 || this.clientWin === 2) {
+      console.log("#####Finish");
+      this.inFinalResult = true;
+      this.inMatchResult = false;
+      setTimeout(() => {
+        this.CockpitUI.matchCountdown(this.disconnectCount);
+      }, this.CockpitUI.popup);
+    } else {
+      this.inMatchResult = true;
+      setTimeout(() => {
+        this.CockpitUI.matchCountdown(this.resetCount);
+      }, this.CockpitUI.popup);
+    }
   }
   //Function to modify Text displayed after a Match is won or lost.
   modifyText(TextElement, textMessage, newColor) {
@@ -26598,8 +26870,6 @@ var PeerGameManager = class extends Component {
     TextElement_component.material.color = newColor;
   }
   disconnectLocalManager() {
-    this.FrontText.active = false;
-    this.BackText.active = false;
     if (this.isHost && this.connections.length) {
       const clientConnection = this.connections[0];
       clientConnection.close();
@@ -26607,8 +26877,17 @@ var PeerGameManager = class extends Component {
       this.connection.close();
     this.LocalPlayer_component.resetPlayer_toStartTransform();
     this.ClientPlayer_component.resetPlayer_toStartTransform();
+    this.CockpitUI.CockpitPanel.active = true;
+    this.hostWin = 0;
+    this.clientWin = 0;
+    this.CockpitUI.result1.text = " ";
+    this.CockpitUI.result2.text = " ";
+    this.CockpitUI.countdownFinish = false;
   }
   resetPlayerAttributes_andUI() {
+    this.isMatchOver = false;
+    this.inPlay = true;
+    this.inMain = false;
     console.log("-----Resetting Player Attributes and UI.----");
     this.LocalPlayer_component.resetPlayerValues();
     this.ClientPlayer_component.resetPlayerValues();
@@ -26617,17 +26896,17 @@ var PeerGameManager = class extends Component {
       this.FieldItemManager.setupItemManager(this.isPlayingAgain);
       this.BulletManager.resetBulletsList();
     }
+    this.CockpitUI.countdown(this.startCount);
   }
   //-----------------------Hiding and showing the Button config.
   //turns the Button Config Image on or off.
   showButtonConfig(isShowing) {
     if (isShowing) {
-      let playerPosition = this.LocalPlayer_component.robotCockpit.getPositionWorld();
-      let playerRotation = this.LocalPlayer_component.robotCockpit.getRotationWorld();
+      let playerPosition = this.LocalPlayer_component.robotCore.getPositionWorld();
+      let playerRotation = this.LocalPlayer_component.robotCore.getRotationWorld();
       let newPosition = [
         playerPosition[0],
-        playerPosition[1],
-        //+0.7, 
+        playerPosition[1] + 0.7,
         playerPosition[2]
       ];
       this.ButtonConfig_Parent.setPositionWorld(newPosition);
@@ -26664,9 +26943,21 @@ var PeerGameManager = class extends Component {
     this.isMatchOver = false;
     if (!Peer)
       throw new Error("Peer object not found");
-    this.peer = new Peer(this.serverId);
+    if (this.isUsingLocalServer) {
+      this.peer = new Peer(this.serverId, {
+        host: "localhost",
+        port: 9001,
+        path: "/deploy"
+      });
+    } else
+      this.peer = new Peer(this.serverId);
+    console.log(
+      "*******************>In Peer Manager-->_host, peer data: ",
+      this.peer
+    );
     this.peer.on("open", this._onHostOpen.bind(this));
     this.peer.on("connection", this._onHostConnected.bind(this));
+    this.peer.on("error", this._onError.bind(this));
     this.peer.on("disconnected", this._onDisconnected.bind(this));
     this.peer.on("call", (call) => {
       this.calls[call.peer] = call;
@@ -26682,6 +26973,9 @@ var PeerGameManager = class extends Component {
     });
     SoundManager.playSound(soundType.menu, "host");
   }
+  _onError(error) {
+    console.log("------------>Peer Manager. An error type " + error.type + " occurred: " + error.message);
+  }
   kick(id) {
     this.currentDataPackage["disconnect"] = this.currentDataPackage["disconnect"] || [];
     this.currentDataPackage["disconnect"].push(id);
@@ -26695,6 +26989,7 @@ var PeerGameManager = class extends Component {
     for (const cb of this.connectionEstablishedCallbacks)
       cb();
     console.log("===========>Peer Manager-->_onHostOpen()");
+    this.CockpitUI.gametext.text = "Waiting for client";
   }
   _onHostConnected(connection) {
     this._hostPlayerJoined(connection.peer, connection.metadata.username);
@@ -26730,6 +27025,9 @@ var PeerGameManager = class extends Component {
     this.disconnect();
     this.currentDataPackage["disconnect"] = this.currentDataPackage["disconnect"] || [];
     this.currentDataPackage["disconnect"].push(connection.peer);
+    if (this.inMain === false && this.inFinalResult === false) {
+      location.reload();
+    }
   }
   _hostPlayerJoined(id, username) {
     if (!this.networkPlayerSpawner)
@@ -26767,10 +27065,25 @@ var PeerGameManager = class extends Component {
       return console.error("peer-manager: Connection id parameter missing");
     if (this.peer)
       return;
-    this.peer = new Peer();
+    if (this.isUsingLocalServer) {
+      this.peer = new Peer(
+        //this.serverId, 
+        {
+          host: "localhost",
+          port: 9001,
+          path: "/deploy"
+        }
+      );
+    } else
+      this.peer = new Peer();
+    console.log(
+      "*******************>In Peer Manager-->_client, peer data: ",
+      this.peer
+    );
     this.peer.on("open", this._clientOnOpen.bind(this));
     this.peer.on("disconnected", this._onDisconnected.bind(this));
     this.connectionId = id;
+    this.peer.on("error", this._onError.bind(this));
     this.peer.on("call", (call) => {
       if (!this.voiceEnabled)
         return;
@@ -26952,14 +27265,29 @@ var PeerGameManager = class extends Component {
     console.log("---------->Peer Manager-->_onClientClose()");
     if (this.peer)
       this.peer.destroy();
+    if (this.inMain === false && this.inFinalResult === false) {
+      location.reload();
+    }
   }
   //Custom data handling in dataReceived Events.
   Client_or_Host_dataHandling(data) {
     var eventHandled = false;
     if (typeof data === "string") {
+      if (data === "HP Request") {
+        console.log("-----Client: HP Request received.");
+        this.sendNetworkMessage({
+          timeOverHP: this.LocalPlayer_component.HP
+        });
+        eventHandled = true;
+      }
       if (data === "matchWin") {
         const isRemotePlayer = true;
-        this.matchFinishedSequence(isRemotePlayer);
+        this.matchFinishedSequence(isRemotePlayer, true);
+        eventHandled = true;
+      }
+      if (data === "matchLose") {
+        const isRemotePlayer = true;
+        this.matchFinishedSequence(isRemotePlayer, false);
         eventHandled = true;
       }
       if (data === "clientSwitched") {
@@ -26972,6 +27300,10 @@ var PeerGameManager = class extends Component {
         console.log("*******Item Manager started in Host (Local) Player.***");
         eventHandled = true;
       }
+    } else if ("timeOverHP" in data) {
+      console.log("------Host: HP Request received. HP is: " + data.timeOverHP);
+      this.timeOver_ClientHPReceived(data.timeOverHP);
+      eventHandled = true;
     } else if ("weaponChange" in data) {
       this.ClientPlayer_component.WeaponsManager.switchWeapon(data.handChange, data.weaponChange);
       eventHandled = true;
@@ -26981,10 +27313,12 @@ var PeerGameManager = class extends Component {
       eventHandled = true;
     } else if ("bulletToDestroy" in data) {
       this.BulletManager.deleteBulletInList(data.bulletToDestroy);
-      if ("shieldHand" in data)
-        this.LocalPlayer_component.shield_DamageReceived(data.shieldHand, data.weaponDamageType);
-      else if ("weaponDamageType" in data)
-        this.LocalPlayer_component.damageReceived(data.weaponDamageType);
+      if (!this.isMatchOver) {
+        if ("shieldHand" in data)
+          this.LocalPlayer_component.shield_DamageReceived(data.shieldHand, data.weaponDamageType);
+        else if ("weaponDamageType" in data)
+          this.LocalPlayer_component.damageReceived(data.weaponDamageType);
+      }
       eventHandled = true;
     } else if ("damageRemoteHP" in data) {
       const PeerPlayer_Component = this.ClientPlayer_component;
@@ -27114,225 +27448,385 @@ var PeerGameManager = class extends Component {
     }
     this.currentDataPackage = {};
   }
+  UIInputCheck(button) {
+    if (this.inMain === true) {
+      console.log("It is main");
+      if (button === "Button_1") {
+        this.host();
+      }
+      if (button === "Button_2") {
+        this.join();
+      }
+    }
+    if (this.inFinalResult === true) {
+      console.log("It is final");
+    }
+  }
 };
 __publicField(PeerGameManager, "TypeName", "peer-game-manager");
-__decorate10([
+__decorate8([
   property.string("THISISAWONDERLANDENGINEPLACEHOLDER")
 ], PeerGameManager.prototype, "serverId", void 0);
-__decorate10([
+__decorate8([
   property.float(0.01)
 ], PeerGameManager.prototype, "networkSendFrequencyInS", void 0);
-__decorate10([
+__decorate8([
   property.bool(true)
 ], PeerGameManager.prototype, "voiceEnabled", void 0);
-__decorate10([
-  property.object()
-], PeerGameManager.prototype, "FrontText", void 0);
-__decorate10([
-  property.object()
-], PeerGameManager.prototype, "BackText", void 0);
-__decorate10([
-  property.object()
-], PeerGameManager.prototype, "ButtonConfig_Parent", void 0);
-__decorate10([
+__decorate8([
   property.object()
 ], PeerGameManager.prototype, "BulletManager", void 0);
-__decorate10([
+__decorate8([
   property.object()
 ], PeerGameManager.prototype, "FieldItemManager", void 0);
-__decorate10([
+__decorate8([
   property.object()
 ], PeerGameManager.prototype, "LevelBarrierManager", void 0);
-__decorate10([
+__decorate8([
   property.object()
 ], PeerGameManager.prototype, "networkPlayerPool", void 0);
-__decorate10([
+__decorate8([
   property.object()
 ], PeerGameManager.prototype, "LocalPlayer", void 0);
-__decorate10([
+__decorate8([
   property.object()
 ], PeerGameManager.prototype, "ClientPlayer", void 0);
-__decorate10([
+__decorate8([
+  property.object()
+], PeerGameManager.prototype, "ButtonConfig_Parent", void 0);
+__decorate8([
   property.bool(true)
 ], PeerGameManager.prototype, "isUsing_FieldItemManager", void 0);
-__decorate10([
+__decorate8([
   property.bool(false)
 ], PeerGameManager.prototype, "isInSoloMode", void 0);
+__decorate8([
+  property.bool(false)
+], PeerGameManager.prototype, "isUsingLocalServer", void 0);
+__decorate8([
+  property.bool(false)
+], PeerGameManager.prototype, "isUsing_BarrierManager", void 0);
+__decorate8([
+  property.object()
+], PeerGameManager.prototype, "CockpitUIManager", void 0);
 
-// js/InputManager.js
-var InputManager = class extends Component {
-  //XR Input Variables (for the hand and index trigger) are not needed.
-  //The Event listeners can handle this input.
-  //GamepadInput Variables. Event listeners for the Gamepad object are limited.
-  LHand_input;
-  RHand_input;
-  L_buttonYHeld = false;
-  L_buttonXHeld = false;
-  R_buttonBHeld = false;
-  R_buttonAHeld = false;
-  L_thumbButtonHeld = false;
-  R_thumbButtonHeld = false;
-  //Including state vars for the Joystick's axes.
-  R_Xaxis_held = false;
-  //  start() {
-  startManager() {
-    console.log(":::::::::::::Starting the Input Manager.");
-    this.local_GM = this.local_GM.getComponent(PeerGameManager);
-    this.localPlayer = this.localPlayer.getComponent(LocalPlayer);
-    this.setupListeners();
+// js/CockpitUIManager.js
+var CockpitUIManager = class extends Component {
+  static onRegister(engine2) {
   }
-  //------------Setting up the Listeners in the Local Player.
-  //We use this to notify the Local Player (or Peer Game Manager) if any objects need to be spawned.
-  //Keyboard listeners are also included, in order to debug in the PC.
-  setupListeners() {
-    this.engine.onXRSessionStart.add((session, mode) => {
-      if (!this.local_GM.isInPCMode)
-        setTimeout(
-          () => {
-            this.localPlayer.update_StandingSittingMode_Offsets();
-            this.localPlayer.updateCockpitPosition();
-          },
-          40
-        );
-      this.engine.xr.session.addEventListener("selectstart", this.selectstart.bind(this));
-      this.engine.xr.session.addEventListener("squeezestart", this.squeezestart.bind(this));
-      this.engine.xr.session.addEventListener("squeezeend", this.squeezeend.bind(this));
-    });
-    this.RHand_input = this.localPlayer.pilotRightHand.getComponent(InputComponent);
-    this.LHand_input = this.localPlayer.pilotLeftHand.getComponent(InputComponent);
-    window.addEventListener("keydown", this.keyPress.bind(this));
+  pm;
+  lp;
+  countdownFinish = false;
+  winlose;
+  popup = 2e3;
+  timeOver = false;
+  extraMatch = false;
+  matchTime = 60;
+  extraTime = 15;
+  init() {
+    this.pm = this.PeerGameManagerObject.getComponent(PeerGameManager);
+    this.lp = this.LocalPlayerObject.getComponent(LocalPlayer);
+    this.Button1Collider = this.Button1.getComponent(PhysXComponent);
+    this.button1mesh = this.Button1.getComponent(MeshComponent);
+    this.button1event = this.Button1.getComponent(CursorTarget);
+    this.button1event.addClickFunction(this.pm.UIInputCheck.bind(this.pm, "Button_1"));
+    this.button1event.addHoverFunction(this.onHover.bind(this, "Button_1"));
+    this.button1event.addUnHoverFunction(this.onUnHover.bind(this, "Button_1"));
+    this.button1event.addClickFunction(this.onClick.bind(this, "Button_1"));
+    this.Button2Collider = this.Button2.getComponent(PhysXComponent);
+    this.button2mesh = this.Button2.getComponent(MeshComponent);
+    this.button2event = this.Button2.getComponent(CursorTarget);
+    this.button2event.addClickFunction(this.pm.UIInputCheck.bind(this.pm, "Button_2"));
+    this.button2event.addHoverFunction(this.onHover.bind(this, "Button_2"));
+    this.button2event.addUnHoverFunction(this.onUnHover.bind(this, "Button_2"));
+    this.button2event.addClickFunction(this.onClick.bind(this, "Button_2"));
+    this.pm.addConnectionEstablishedCallback(this.hideButton.bind(this));
+    this.pm.addDisconnectCallback(this.showButton.bind(this));
+    this.CockpitPanel.active = true;
+    this.CockpitPanelText.active = true;
+    this.paneltext = this.CockpitPanelText.getComponent(TextComponent);
+    this.paneltext.text = " ";
+    this.gametext = this.GameText.getComponent(TextComponent);
+    this.gametext.text = " ";
+    this.count = this.CountText.getComponent(TextComponent);
+    this.count.text = " ";
+    this.MatchResultText1.active = true;
+    this.result1 = this.MatchResultText1.getComponent(TextComponent);
+    this.result1.text = " ";
+    this.MatchResultText2.active = true;
+    this.result2 = this.MatchResultText2.getComponent(TextComponent);
+    this.result2.text = " ";
+    this.LPilot_Cursor.active = true;
+    this.RPilot_Cursor.active = true;
+    this.TitleImage.active = true;
+    this.ResultImage.active = false;
+    this.resultimg = this.ResultImage.getComponent(MeshComponent);
+    this.CountdownImage.active = false;
+    this.countmaterial = this.CountdownImage.getComponent(MeshComponent);
+    this.timertext = this.MatchTimer.getComponent(TextComponent);
+    this.timertext.text = " ";
   }
-  //-----------Called from listener: Keyboard input check function.            
-  keyPress(e) {
-    if (e.keyCode === 77) {
-      this.localPlayer.switchWeapon(true, "left");
-    } else if (e.keyCode === 52) {
-      this.local_GM.matchFinishedSequence();
-    } else if (e.keyCode === 16) {
-      this.localPlayer.rotate(45, false);
-    } else if (e.keyCode === 13) {
-      this.localPlayer.rotate(45, true);
-    } else if (e.keyCode === 57) {
-      this.localPlayer.rotate(25, true, "X");
-    } else if (e.keyCode === 48) {
-      this.localPlayer.rotate(25, false, "X");
-    } else if (e.keyCode === 32) {
-      this.localPlayer.bulletInputEvent("left");
-    }
+  start() {
   }
-  //-----------Called from listener: XR Input check function(s). 
-  //Only checking for the index trigger input check for now.
-  selectstart(e) {
-    this.localPlayer.bulletInputEvent(e.inputSource.handedness);
-  }
-  squeezestart(e) {
-    if (e.inputSource.handedness === "left")
-      this.L_thumbButtonHeld = true;
-    else
-      this.R_thumbButtonHeld = true;
-    this.local_GM.showButtonConfig(true);
-  }
-  squeezeend(e) {
-    if (e.inputSource.handedness === "left")
-      this.L_thumbButtonHeld = false;
-    else
-      this.R_thumbButtonHeld = false;
-    this.local_GM.showButtonConfig(false);
-  }
-  //------------XR Gamepad input check Function. This is called from the update(dt) function.
-  checkGamePadState(handInput) {
-    if (handInput && handInput.xrInputSource) {
-      var upButtonHeld, downButtonHeld;
-      var whichHand, axisHeld;
-      if (handInput === this.RHand_input) {
-        upButtonHeld = this.R_buttonBHeld;
-        downButtonHeld = this.R_buttonAHeld;
-        axisHeld = this.R_Xaxis_held;
-        whichHand = "right";
-      } else if (handInput === this.LHand_input) {
-        upButtonHeld = this.L_buttonYHeld;
-        downButtonHeld = this.L_buttonXHeld;
-        whichHand = "left";
-      }
-      switch (true) {
-        case handInput.xrInputSource.gamepad.buttons[5].pressed:
-          if (!upButtonHeld) {
-            upButtonHeld = true;
-            this.localPlayer.switchWeapon(true, whichHand);
-          }
-          break;
-        case handInput.xrInputSource.gamepad.buttons[4].pressed:
-          if (!downButtonHeld) {
-            downButtonHeld = true;
-            this.localPlayer.isCockpit_following_pilotHead = false;
-          }
-          break;
-        case (handInput.xrInputSource.gamepad.axes[2] !== 0 && handInput === this.RHand_input):
-          if (!axisHeld) {
-            let axisValue = this.filterAxisInput(handInput.xrInputSource.gamepad.axes[2], 0.2);
-            if (axisValue != 0) {
-              axisHeld = true;
-              this.localPlayer.rotate(null, axisValue > 0 ? true : false);
-            }
-          }
-          break;
-        default:
-          break;
-      }
-      switch (true) {
-        case (upButtonHeld && !handInput.xrInputSource.gamepad.buttons[5].pressed):
-          upButtonHeld = false;
-          break;
-        case (downButtonHeld && !handInput.xrInputSource.gamepad.buttons[4].pressed):
-          downButtonHeld = false;
-          this.localPlayer.isCockpit_following_pilotHead = true;
-          break;
-        case (axisHeld && handInput.xrInputSource.gamepad.axes[2] === 0):
-          axisHeld = false;
-          break;
-        default:
-          break;
-      }
-      if (handInput === this.RHand_input) {
-        this.R_buttonBHeld = upButtonHeld;
-        this.R_buttonAHeld = downButtonHeld;
-        this.R_Xaxis_held = axisHeld;
-      } else if (handInput === this.LHand_input) {
-        this.L_buttonYHeld = upButtonHeld;
-        this.L_buttonXHeld = downButtonHeld;
-      }
-    }
-  }
-  //-----------Input axis filterning function.
-  filterAxisInput(axisValue, deadThreshold) {
-    if (axisValue < deadThreshold && axisValue > -1 * deadThreshold)
-      axisValue = 0;
-    else {
-      if (axisValue > 0)
-        axisValue = 1;
-      if (axisValue < 0)
-        axisValue = -1;
-    }
-    return axisValue;
-  }
-  //----------Looping update function.
   update(dt) {
-    this.checkGamePadState(this.RHand_input);
-    this.checkGamePadState(this.LHand_input);
+  }
+  onHover(button) {
+    if (button === "Button_1") {
+      this.button1mesh.material = this.ButtonHover;
+    }
+    if (button === "Button_2") {
+      this.button2mesh.material = this.ButtonHover;
+    }
+  }
+  onUnHover(button) {
+    if (button === "Button_1") {
+      this.button1mesh.material = this.ButtonDefault;
+    }
+    if (button === "Button_2") {
+      this.button2mesh.material = this.ButtonDefault;
+    }
+  }
+  onClick(button) {
+    if (button === "Button_1") {
+      this.button1mesh.material = this.ButtonClick;
+    }
+    if (button === "Button_2") {
+      this.button2mesh.material = this.ButtonClick;
+    }
+  }
+  // showResults(resultsMassage, newColor){
+  //     this.paneltext.text = resultsMassage;
+  //     this.paneltext.material.color = newColor;
+  //     this.CockpitPanel.active = true;
+  //     this.CockpitPanelText.active = true;
+  //     this.MatchResultText1.active = true;
+  //     this.MatchResultText2.active = true;
+  // }
+  showResultsImage(result) {
+    this.timertext.text = " ";
+    this.ResultImage.active = true;
+    if (result === "win") {
+      this.resultimg.material = this.Win;
+    } else if (result === "lose") {
+      this.resultimg.material = this.Fail;
+    }
+    setTimeout(() => {
+      this.CockpitPanel.active = true;
+      if (this.pm.isHost) {
+        console.log("$$$$$ your score is ", this.pm.hostWin);
+        this.result1.text = "      WINS : " + this.pm.hostWin;
+        this.result2.text = "LOSSES : " + this.pm.clientWin;
+      } else if (this.pm.connection) {
+        console.log("$$$$$ your score is ", this.pm.clientWin);
+        this.result1.text = "      WINS : " + this.pm.clientWin;
+        this.result2.text = "LOSSES : " + this.pm.hostWin;
+      }
+    }, this.popup);
+  }
+  hideResults() {
+    this.CockpitPanel.active = false;
+    this.paneltext.text = " ";
+    this.ResultImage.active = false;
+    this.gametext.text = " ";
+    this.ControlHintText.active = false;
+  }
+  showButton() {
+    this.Button1Collider.active = true;
+    this.Button2Collider.active = true;
+    this.Button1.active = true;
+    this.Button2.active = true;
+    this.Button1Text.active = true;
+    this.Button2Text.active = true;
+    this.TitleImage.active = true;
+    this.ControlHintText.active = true;
+    this.CockpitPanel.active = true;
+  }
+  hideButton() {
+    this.Button1Collider.active = false;
+    this.Button2Collider.active = false;
+    this.Button1.active = false;
+    this.Button2.active = false;
+    this.Button1Text.active = false;
+    this.Button2Text.active = false;
+  }
+  //Countdown before match start
+  countdown(count) {
+    this.CountdownImage.active = true;
+    this.ControlHintText.active = true;
+    if (count === 3) {
+      this.countmaterial.material = this.Count3;
+    } else if (count === 2) {
+      this.countmaterial.material = this.Count2;
+    } else if (count === 1) {
+      this.countmaterial.material = this.Count1;
+    }
+    if (this.pm.hostWin === 0 && this.pm.clientWin === 0) {
+      this.paneltext.text = "ROUND 1";
+    } else if (this.pm.hostWin === 1 && this.pm.clientWin === 0 || this.pm.hostWin === 0 && this.pm.clientWin === 1) {
+      this.paneltext.text = "ROUND 2";
+    } else if (this.pm.hostWin === 1 && this.pm.clientWin === 1) {
+      this.paneltext.text = "FINAL ROUND";
+    }
+    this.gametext.text = " ";
+    this.result1.text = " ";
+    this.result2.text = " ";
+    this.TitleImage.active = false;
+    this.ResultImage.active = false;
+    this.timertext.text = " ";
+    if (count >= 1) {
+      this.countdownFinish = false;
+      count--;
+      setTimeout(() => {
+        this.countdown(count);
+      }, 1e3);
+    } else {
+      console.log("START");
+      this.countmaterial.material = this.CountStart;
+      setTimeout(() => {
+        this.hideResults();
+        this.countdownFinish = true;
+        this.lp.isCockpit_following_pilotHead = true;
+        this.LPilot_Cursor.active = false;
+        this.RPilot_Cursor.active = false;
+        this.CountdownImage.active = false;
+        this.matchTimer(this.matchTime);
+      }, 1e3);
+    }
+  }
+  //Countdown before next round
+  matchCountdown(count) {
+    console.log(count);
+    if (!this.pm.inFinalResult) {
+      this.gametext.text = "Restart in " + count + " seconds";
+    } else {
+      this.gametext.text = "New Game in " + count + " seconds";
+    }
+    if (count >= 0) {
+      count--;
+      setTimeout(() => {
+        this.matchCountdown(count);
+      }, 1e3);
+    } else {
+      this.gametext.text = " ";
+      if (!this.pm.inFinalResult) {
+        console.log(">>> UI Manager >>> Reset");
+        this.pm.resetPlayerAttributes_andUI();
+      } else {
+        console.log(">>> UI Manager >>> Disconnect");
+        this.pm.disconnectLocalManager();
+        this.paneltext.text = " ";
+        this.pm.inMain = true;
+        this.pm.inFinalResult = false;
+        this.TitleImage.active = true;
+        this.ResultImage.active = false;
+        this.LPilot_Cursor.active = true;
+        this.RPilot_Cursor.active = true;
+      }
+    }
+  }
+  matchTimer(time) {
+    this.timeOver = false;
+    this.timertext.text = time;
+    if (this.extraMatch === false) {
+      console.log(time);
+      if (time === 60) {
+        this.timertext.material.color = [0, 0, 1, 1];
+        this.timertext.material.effectColor = [0, 0, 1, 1];
+      } else if (time <= 59 && time >= 11) {
+        this.timertext.material.color = [1, 1, 1, 1];
+        this.timertext.material.effectColor = [1, 1, 1, 1];
+      } else if (time <= 10 && time >= 0) {
+        this.timertext.material.color = [1, 0, 0, 1];
+        this.timertext.material.effectColor = [1, 0, 0, 1];
+      }
+    }
+    if (this.extraMatch === true) {
+      console.log("extra time : ", time);
+      if (this.pm.isHost) {
+        this.pm.timeOver_ClientHPRequest();
+      }
+      if (time === 15) {
+        this.timertext.material.color = [0, 0, 1, 1];
+        this.timertext.material.effectColor = [0, 0, 1, 1];
+      } else if (time <= 14 && time >= 6) {
+        this.timertext.material.color = [1, 1, 1, 1];
+        this.timertext.material.effectColor = [1, 1, 1, 1];
+      } else if (time <= 5 && time >= 0) {
+        this.timertext.material.color = [1, 0, 0, 1];
+        this.timertext.material.effectColor = [1, 0, 0, 1];
+      }
+    }
+    if (time >= 0 && this.pm.inPlay === true) {
+      time--;
+      setTimeout(() => {
+        this.matchTimer(time);
+      }, 1e3);
+    } else if (time >= -1 && this.pm.inPlay === true) {
+      this.timeOver = true;
+      this.timertext.text = " ";
+      setTimeout(() => {
+        if (this.pm.isHost) {
+          this.pm.timeOver_ClientHPRequest();
+        }
+      }, 1e3);
+    }
+    if (this.timeOver === true && this.pm.isMatchOver === false) {
+      this.extraMatch = true;
+      console.log(">>>>> UI Manager >>>>> Is this extra time? : ", this.extraMatch);
+      this.matchTimer(this.extraTime);
+      this.paneltext.text = "EXTRA TIME";
+      setTimeout(() => {
+        this.paneltext.text = " ";
+      }, 1e3);
+    }
   }
 };
-__publicField(InputManager, "TypeName", "InputManager");
-// static onRegister(engine) {
-//     /* Triggered when this component class is registered.
-//      * You can for instance register extra component types here
-//      * that your component may create. */
-// }
+__publicField(CockpitUIManager, "TypeName", "CockpitUIManager");
 /* Properties that are configurable in the editor */
-__publicField(InputManager, "Properties", {
-  //Reference to the PeerGameServer parent.
-  //Reference to the Game Manager.
-  local_GM: Property.object(),
-  localPlayer: Property.object()
+__publicField(CockpitUIManager, "Properties", {
+  PeerGameManagerObject: Property.object(),
+  LocalPlayerObject: Property.object(),
+  //Panel
+  CockpitPanel: Property.object(),
+  //Title and winner results
+  CockpitPanelText: Property.object(),
+  //Button
+  Button1: Property.object(),
+  Button2: Property.object(),
+  //Button text
+  Button1Text: Property.object(),
+  Button2Text: Property.object(),
+  //Button material default / hover / click
+  ButtonDefault: Property.material(),
+  ButtonHover: Property.material(),
+  ButtonClick: Property.material(),
+  //to show game progress
+  GameText: Property.object(),
+  //Countdown
+  CountText: Property.object(),
+  //Countdown image
+  CountdownImage: Property.object(),
+  //Countdown material
+  Count1: Property.material(),
+  Count2: Property.material(),
+  Count3: Property.material(),
+  CountStart: Property.material(),
+  //to show the results
+  MatchResultText1: Property.object(),
+  MatchResultText2: Property.object(),
+  //Result image win or fail
+  ResultImage: Property.object(),
+  //Result materail
+  Win: Property.material(),
+  Fail: Property.material(),
+  //to change the active of the pilot cursor
+  LPilot_Cursor: Property.object(),
+  RPilot_Cursor: Property.object(),
+  //to show the title image
+  TitleImage: Property.object(),
+  ControlHintText: Property.object(),
+  //to show the match time
+  MatchTimer: Property.object()
 });
 
 // js/LevelObjects/FaceWeaponScript.js
@@ -27435,54 +27929,6 @@ __publicField(shieldData2, "Properties", {
   //respawn delay time after being destroyed, in seconds.
 });
 
-// js/network-buttons.js
-var NetworkButtons = class extends Component {
-  /** @type {Object3D} */
-  PeerGameManagerObject;
-  pm;
-  init() {
-    this.pm = this.PeerGameManagerObject.getComponent(PeerGameManager);
-    this.hostButtonCollider = this.hostButton.getComponent(PhysXComponent);
-    this.hostButton.getComponent(CursorTarget).addClickFunction(this.pm.host.bind(this.pm));
-    this.joinButtonCollider = this.joinButton.getComponent(PhysXComponent);
-    this.joinButton.getComponent(CursorTarget).addClickFunction(this.pm.join.bind(this.pm));
-    this.pm.addConnectionEstablishedCallback(this.hide.bind(this));
-    this.pm.addDisconnectCallback(this.show.bind(this));
-    console.log(")))))))))))))))))))))))Peer Manager: ", this.pm);
-    console.log(")))))))))))))))))))))))Join BUtton, console Target", this.joinButtonCollider);
-  }
-  // clickTest()
-  // {
-  //     console.log("클릭!!!!!!!!!!!!!!!!!!!!!!!!!!!");
-  // }
-  show() {
-    this.hostButtonCollider.active = true;
-    this.joinButtonCollider.active = true;
-    this.hostButton.active = true;
-    this.joinButton.active = true;
-    if (!this.pm.isHost) {
-      this.object.setPositionLocal([0, 0, 6.237]);
-      this.object.rotateAxisAngleDegObject([0, 1, 0], 180);
-    } else
-      this.object.setPositionLocal([0, 0, 0]);
-  }
-  hide() {
-    this.hostButtonCollider.active = false;
-    this.joinButtonCollider.active = false;
-    this.hostButton.active = false;
-    this.joinButton.active = false;
-    this.object.setPositionLocal([0, -300, 0]);
-  }
-};
-__publicField(NetworkButtons, "TypeName", "network-buttons");
-__publicField(NetworkButtons, "Properties", {
-  PeerGameManagerObject: { type: Type.Object },
-  // cursorL: {type: Type.Object},
-  // cursorR: {type: Type.Object},
-  hostButton: { type: Type.Object },
-  joinButton: { type: Type.Object }
-});
-
 // js/index.js
 var RuntimeOptions = {
   physx: true,
@@ -27532,6 +27978,7 @@ engine.registerComponent(MouseLookComponent);
 engine.registerComponent(PlayerHeight);
 engine.registerComponent(TeleportComponent);
 engine.registerComponent(WasdControlsComponent);
+engine.registerComponent(CockpitUIManager);
 engine.registerComponent(InputManager);
 engine.registerComponent(FaceWeaponScript);
 engine.registerComponent(FieldItem);
@@ -27552,7 +27999,6 @@ engine.registerComponent(SoundManager);
 engine.registerComponent(WeaponManager);
 engine.registerComponent(shieldData2);
 engine.registerComponent(weaponData2);
-engine.registerComponent(NetworkButtons);
 engine.registerComponent(TeleportFuel3);
 engine.scene.load(`${Constants.ProjectName}.bin`);
 /*! Bundled license information:
